@@ -42,10 +42,16 @@ COMMENT_TIME_FORMAT = "%-d %b %Y %H:%M:%S.%f"  # Check datetime strftime formats
 # Just for testing purposes, i.e. not good for systemd service.
 ADD_ON_START = False
 
+# Settings for any other lists in Mikrotik you wish to retain after reboot.
+ENABLE_OTHER_LISTS = False
+OTHER_LISTS = []  # Add your list(s), e.g. ["blocklist1", "blocklist2"]
+SAVE_LOCATION = os.path.abspath("/var/log/mikrotik/lists.json")
+
+
 class EventHandler(pyinotify.ProcessEvent):
     def process_IN_MODIFY(self, event):
         try:
-            add_to_tik(read_json(FILEPATH))            
+            add_to_tik(read_json(FILEPATH))
         except ConnectionError:
             connect_to_tik()
 
@@ -103,7 +109,7 @@ def add_to_tik(alerts):
         timestamp = dt.strptime(event["timestamp"], "%Y-%m-%dT%H:%M:%S.%f%z").strftime(COMMENT_TIME_FORMAT)
 
         if event["src_ip"].startswith(WHITELIST_IPS):  # If you are source ip, then add destination ip.
-            if event["dest_ip"].startswith(WHITELIST_IPS):  
+            if event["dest_ip"].startswith(WHITELIST_IPS):
                 continue  # Skip adding anything if both source and destination ips are from WHITELIST_IPS. (just in case)
 
             try:
@@ -127,7 +133,7 @@ def add_to_tik(alerts):
                 if "failure: already have such entry" in str(e):
                     for row in address_list.select(_id, _list, _address).where(_address == event["src_ip"], _list == ROUTER_LIST_NAME):
                         address_list.remove(row[".id"])
-                        
+
                     address_list.add(list=ROUTER_LIST_NAME, address=event["src_ip"], comment=f"[{event['alert']['gid']}:{event['alert']['signature_id']}] {event['alert']['signature']} ::: DPort: {event.get('dest_port')}/{event['proto']} ::: timestamp: {timestamp}", timeout=TIMEOUT)
 
                 else:
@@ -138,6 +144,11 @@ def add_to_tik(alerts):
         last_pos = 0
         add_to_tik(read_json(FILEPATH))
 
+        if ENABLE_OTHER_LISTS:
+            add_other_lists(api)
+
+    if ENABLE_OTHER_LISTS and not check_tik_uptime(resources):
+        save_other_lists(api)
 
 def check_tik_uptime(resources):  # Check if router has been up for less than 10 minutes
     for row in resources:
@@ -177,6 +188,8 @@ def connect_to_tik():
 
         except ConnectionRefusedError:
             print("Connection refused. (api-ssl disabled in router?)")
+            sleep(10)
+            continue
 
         except OSError as e:
             if "[Errno 113] No route to host" in str(e):
@@ -190,10 +203,38 @@ def connect_to_tik():
             else:
                 raise
 
+def save_other_lists(api):
+    _address = Key("address")
+    _list = Key("list")
+    _timeout = Key("timeout")
+    address_list = api.path("/ip/firewall/address-list")
+    os.makedirs(os.path.dirname(SAVE_LOCATION), exist_ok=True)
+
+    with open(SAVE_LOCATION, "w") as f:
+        for tik_list in OTHER_LISTS:
+            for row in address_list.select(_list, _address, _timeout).where(_list == tik_list):
+                f.write(ujson.dumps(row) + "\n")
+
+def add_other_lists(api):
+    address_list = api.path("/ip/firewall/address-list")
+
+    with open(SAVE_LOCATION, "r") as f:
+        addresses = [ujson.loads(line) for line in f.readlines()]
+
+    for row in addresses:
+        try:
+            address_list.add(list=row["list"], address=row["address"], timeout=row["timeout"])
+
+        except librouteros.exceptions.TrapError as e:
+            if "failure: already have such entry" in str(e):
+                continue
+            else:
+                raise
+
 if __name__ == "__main__":
     time = dt.now(tz.utc) - td(minutes=10)  # Set time to 10 minutes before now, so "(dt.now(tz.utc) - time) / td(minutes=1) > 10" is True the first time around.
     last_pos = 0
-    seek_to_end(FILEPATH)    
+    seek_to_end(FILEPATH)
     connect_to_tik()
 
     wm = pyinotify.WatchManager()
