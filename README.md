@@ -26,7 +26,7 @@ I'm using it as a systemd service:
 ```
 [Unit]
 Description=Suricata to Mikrotik API in Python
-After=network.target
+After=network.target time-sync.target
 Requires=network-online.target
 
 [Service]
