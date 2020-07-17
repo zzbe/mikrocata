@@ -31,9 +31,10 @@ Requires=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /usr/local/bin/suritik.py >> /var/log/suricata/suritik-log 2>&1
+ExecStart=/usr/bin/python3 /usr/local/bin/suritik.py
 Restart=on-failure
 RestartSec=3
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target
