@@ -22,7 +22,7 @@ import re
 from time import sleep
 from datetime import datetime as dt, timedelta as td, timezone as tz
 import os
-
+#----------------------------------------------------------------------------#
 # Edit these settings:
 USERNAME = "suricata"
 PASSWORD = "suricata123"
@@ -30,11 +30,15 @@ ROUTER_IP = "192.168.88.1"
 TIMEOUT = "1d"
 PORT = 8729  # api-ssl port
 FILEPATH = os.path.abspath("/var/log/suricata/alerts.json")
-ROUTER_LIST_NAME = "Suricata"
-WAN_IP = "n/a"  # You can add your WAN IP if you are port-mirroring, so it doesn't get mistakenly added. (don't leave empty string)
+BLOCK_LIST_NAME = "Suricata"
+WAN_IP = "n/a"  # You can add your WAN IP, so it doesn't get mistakenly blocked. (don't leave empty string)
 LOCAL_IP_PREFIX = "192.168."
 WHITELIST_IPS = (WAN_IP, LOCAL_IP_PREFIX, "127.0.0.1")
 COMMENT_TIME_FORMAT = "%-d %b %Y %H:%M:%S.%f"  # Check datetime strftime formats
+
+# Save Mikrotik address lists to a file and reload them on Mikrotik reboot:
+SAVE_LISTS = [BLOCK_LIST_NAME]  # You can add additional Mikrotik's list(s), e.g. [BLOCK_LIST_NAME, "blocklist1", "blocklist2"]
+SAVE_LOCATION = os.path.abspath("/var/log/mikrotik/lists.json")  # (!) Make sure you have privileges (!)
 
 # Add all alerts from alerts.json on start?
 # Setting this to True will start reading alerts.json from beginning
@@ -42,11 +46,7 @@ COMMENT_TIME_FORMAT = "%-d %b %Y %H:%M:%S.%f"  # Check datetime strftime formats
 # Just for testing purposes, i.e. not good for systemd service.
 ADD_ON_START = False
 
-# Settings for any other lists in Mikrotik you wish to retain after reboot.
-ENABLE_OTHER_LISTS = False
-OTHER_LISTS = []  # Add your list(s), e.g. ["blocklist1", "blocklist2"]
-SAVE_LOCATION = os.path.abspath("/var/log/mikrotik/lists.json")
-
+#----------------------------------------------------------------------------#
 
 class EventHandler(pyinotify.ProcessEvent):
     def process_IN_MODIFY(self, event):
@@ -113,44 +113,40 @@ def add_to_tik(alerts):
                 continue  # Skip adding anything if both source and destination ips are from WHITELIST_IPS. (just in case)
 
             try:
-                address_list.add(list=ROUTER_LIST_NAME, address=event["dest_ip"], comment=f"[{event['alert']['gid']}:{event['alert']['signature_id']}] {event['alert']['signature']} ::: SPort: {event.get('src_port')}/{event['proto']} ::: timestamp: {timestamp}", timeout=TIMEOUT)
+                address_list.add(list=BLOCK_LIST_NAME, address=event["dest_ip"], comment=f"[{event['alert']['gid']}:{event['alert']['signature_id']}] {event['alert']['signature']} ::: SPort: {event.get('src_port')}/{event['proto']} ::: timestamp: {timestamp}", timeout=TIMEOUT)
 
             except librouteros.exceptions.TrapError as e:
                 if "failure: already have such entry" in str(e):  # If such entry already exists, delete it and re-add.
-                    for row in address_list.select(_id, _list, _address).where(_address == event["dest_ip"], _list == ROUTER_LIST_NAME):
+                    for row in address_list.select(_id, _list, _address).where(_address == event["dest_ip"], _list == BLOCK_LIST_NAME):
                         address_list.remove(row[".id"])
 
-                    address_list.add(list=ROUTER_LIST_NAME, address=event["dest_ip"], comment=f"[{event['alert']['gid']}:{event['alert']['signature_id']}] {event['alert']['signature']} ::: SPort: {event.get('src_port')}/{event['proto']} ::: timestamp: {timestamp}", timeout=TIMEOUT)
+                    address_list.add(list=BLOCK_LIST_NAME, address=event["dest_ip"], comment=f"[{event['alert']['gid']}:{event['alert']['signature_id']}] {event['alert']['signature']} ::: SPort: {event.get('src_port')}/{event['proto']} ::: timestamp: {timestamp}", timeout=TIMEOUT)
 
                 else:
                     raise
 
         else:  # Add source ip.
             try:
-                address_list.add(list=ROUTER_LIST_NAME, address=event["src_ip"], comment=f"[{event['alert']['gid']}:{event['alert']['signature_id']}] {event['alert']['signature']} ::: DPort: {event.get('dest_port')}/{event['proto']} ::: timestamp: {timestamp}", timeout=TIMEOUT)
+                address_list.add(list=BLOCK_LIST_NAME, address=event["src_ip"], comment=f"[{event['alert']['gid']}:{event['alert']['signature_id']}] {event['alert']['signature']} ::: DPort: {event.get('dest_port')}/{event['proto']} ::: timestamp: {timestamp}", timeout=TIMEOUT)
 
             except librouteros.exceptions.TrapError as e:
                 if "failure: already have such entry" in str(e):
-                    for row in address_list.select(_id, _list, _address).where(_address == event["src_ip"], _list == ROUTER_LIST_NAME):
+                    for row in address_list.select(_id, _list, _address).where(_address == event["src_ip"], _list == BLOCK_LIST_NAME):
                         address_list.remove(row[".id"])
 
-                    address_list.add(list=ROUTER_LIST_NAME, address=event["src_ip"], comment=f"[{event['alert']['gid']}:{event['alert']['signature_id']}] {event['alert']['signature']} ::: DPort: {event.get('dest_port')}/{event['proto']} ::: timestamp: {timestamp}", timeout=TIMEOUT)
+                    address_list.add(list=BLOCK_LIST_NAME, address=event["src_ip"], comment=f"[{event['alert']['gid']}:{event['alert']['signature_id']}] {event['alert']['signature']} ::: DPort: {event.get('dest_port')}/{event['proto']} ::: timestamp: {timestamp}", timeout=TIMEOUT)
 
                 else:
                     raise
-    # If router has been rebooted in past 10 minutes, add whole file, then wait for 10 minutes. (so rules don't get constantly re-added for 10 minutes)
+    # If router has been rebooted in past 10 minutes, add saved list(s), then wait for 10 minutes. (so rules don't get constantly re-added for 10 minutes)
     if check_tik_uptime(resources) and (dt.now(tz.utc) - time) / td(minutes=1) > 10:
         time = dt.now(tz.utc)
-        last_pos = 0
-        add_to_tik(read_json(FILEPATH))
+        add_saved_lists(api)
 
-        if ENABLE_OTHER_LISTS:
-            add_other_lists(api)
+    if not check_tik_uptime(resources):
+        save_lists(api)
 
-    if ENABLE_OTHER_LISTS and not check_tik_uptime(resources):
-        save_other_lists(api)
-
-def check_tik_uptime(resources):  # Check if router has been up for less than 10 minutes
+def check_tik_uptime(resources):  # Check if router has been up for less than 10 minutes.
     for row in resources:
         uptime = row["uptime"]
 
@@ -203,27 +199,31 @@ def connect_to_tik():
             else:
                 raise
 
-def save_other_lists(api):
+def save_lists(api):
     _address = Key("address")
     _list = Key("list")
     _timeout = Key("timeout")
+    _comment = Key("comment")
     address_list = api.path("/ip/firewall/address-list")
     os.makedirs(os.path.dirname(SAVE_LOCATION), exist_ok=True)
 
     with open(SAVE_LOCATION, "w") as f:
-        for tik_list in OTHER_LISTS:
-            for row in address_list.select(_list, _address, _timeout).where(_list == tik_list):
+        for save_list in SAVE_LISTS:
+            for row in address_list.select(_list, _address, _timeout, _comment).where(_list == save_list):
                 f.write(ujson.dumps(row) + "\n")
 
-def add_other_lists(api):
+def add_saved_lists(api):
     address_list = api.path("/ip/firewall/address-list")
 
     with open(SAVE_LOCATION, "r") as f:
         addresses = [ujson.loads(line) for line in f.readlines()]
 
     for row in addresses:
+        cmnt = row.get("comment")
+        if cmnt == "None":
+            cmnt = ""
         try:
-            address_list.add(list=row["list"], address=row["address"], timeout=row["timeout"])
+            address_list.add(list=row["list"], address=row["address"], comment=cmnt, timeout=row["timeout"])
 
         except librouteros.exceptions.TrapError as e:
             if "failure: already have such entry" in str(e):
@@ -241,4 +241,8 @@ if __name__ == "__main__":
     handler = EventHandler()
     notifier = pyinotify.Notifier(wm, handler)
     wm.add_watch(FILEPATH, pyinotify.IN_MODIFY)
-    notifier.loop()
+
+    try:
+        notifier.loop()
+    except ConnectionClosed:
+        connect_to_tik()
