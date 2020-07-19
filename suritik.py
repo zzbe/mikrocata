@@ -22,8 +22,10 @@ import re
 from time import sleep
 from datetime import datetime as dt, timedelta as td, timezone as tz
 import os
+
 #----------------------------------------------------------------------------#
 # Edit these settings:
+
 USERNAME = "suricata"
 PASSWORD = "suricata123"
 ROUTER_IP = "192.168.88.1"
@@ -220,7 +222,7 @@ def add_saved_lists(api):
 
     for row in addresses:
         cmnt = row.get("comment")
-        if cmnt == "None":
+        if cmnt is None:
             cmnt = ""
         try:
             address_list.add(list=row["list"], address=row["address"], comment=cmnt, timeout=row["timeout"])
@@ -244,5 +246,5 @@ if __name__ == "__main__":
 
     try:
         notifier.loop()
-    except ConnectionClosed:
+    except librouteros.exceptions.ConnectionClosed:
         connect_to_tik()
