@@ -10,20 +10,21 @@
 #      filename: alerts.json
 #      types:
 #        - alert
-#
 
 import ssl
+import os
+import re
+from time import sleep
+from datetime import datetime as dt
+from datetime import timedelta as td
+from datetime import timezone as tz
+import pyinotify
+import ujson
 import librouteros
 from librouteros import connect
 from librouteros.query import Key
-import ujson
-import pyinotify
-import re
-from time import sleep
-from datetime import datetime as dt, timedelta as td, timezone as tz
-import os
 
-#----------------------------------------------------------------------------#
+# ------------------------------------------------------------------------------
 # Edit these settings:
 
 USERNAME = "suricata"
@@ -33,14 +34,20 @@ TIMEOUT = "1d"
 PORT = 8729  # api-ssl port
 FILEPATH = os.path.abspath("/var/log/suricata/alerts.json")
 BLOCK_LIST_NAME = "Suricata"
-WAN_IP = "n/a"  # You can add your WAN IP, so it doesn't get mistakenly blocked. (don't leave empty string)
+
+# You can add your WAN IP, so it doesn't get mistakenly blocked.
+# (don't leave empty string)
+WAN_IP = "n/a"
 LOCAL_IP_PREFIX = "192.168."
 WHITELIST_IPS = (WAN_IP, LOCAL_IP_PREFIX, "127.0.0.1")
-COMMENT_TIME_FORMAT = "%-d %b %Y %H:%M:%S.%f"  # Check datetime strftime formats
+COMMENT_TIME_FORMAT = "%-d %b %Y %H:%M:%S.%f"  # See datetime strftime formats.
 
-# Save Mikrotik address lists to a file and reload them on Mikrotik reboot:
-SAVE_LISTS = [BLOCK_LIST_NAME]  # You can add additional Mikrotik's list(s), e.g. [BLOCK_LIST_NAME, "blocklist1", "blocklist2"]
-SAVE_LOCATION = os.path.abspath("/var/log/mikrotik/lists.json")  # (!) Make sure you have privileges (!)
+# Save Mikrotik address lists to a file and reload them on Mikrotik reboot.
+# You can add additional list(s), e.g. [BLOCK_LIST_NAME, "blocklist1", "list2"]
+SAVE_LISTS = [BLOCK_LIST_NAME]
+
+# (!) Make sure you have privileges (!)
+SAVE_LOCATION = os.path.abspath("/var/log/mikrotik/lists.json")
 
 # Add all alerts from alerts.json on start?
 # Setting this to True will start reading alerts.json from beginning
@@ -48,7 +55,8 @@ SAVE_LOCATION = os.path.abspath("/var/log/mikrotik/lists.json")  # (!) Make sure
 # Just for testing purposes, i.e. not good for systemd service.
 ADD_ON_START = False
 
-#----------------------------------------------------------------------------#
+# ------------------------------------------------------------------------------
+
 
 class EventHandler(pyinotify.ProcessEvent):
     def process_IN_MODIFY(self, event):
@@ -59,11 +67,14 @@ class EventHandler(pyinotify.ProcessEvent):
 
         check_truncated(FILEPATH)
 
-def check_truncated(fpath):  # Check if logrotate truncated file. (Use 'copytruncate' option for this to work I guess.)
+
+# Check if logrotate truncated file. (Use 'copytruncate' option.)
+def check_truncated(fpath):
     global last_pos
 
     if last_pos > os.path.getsize(fpath):
         last_pos = 0
+
 
 def seek_to_end(fpath):
     global last_pos
@@ -74,10 +85,11 @@ def seek_to_end(fpath):
                 last_pos = os.path.getsize(fpath)
                 return
 
-            except(FileNotFoundError):
+            except FileNotFoundError:
                 print(f"File: {fpath} not found. Retrying in 10 seconds..")
                 sleep(10)
                 continue
+
 
 def read_json(fpath):
     global last_pos
@@ -90,10 +102,11 @@ def read_json(fpath):
                 last_pos = f.tell()
                 return alerts
 
-        except(FileNotFoundError):
+        except FileNotFoundError:
             print(f"File: {fpath} not found. Retrying in 10 seconds..")
             sleep(10)
             continue
+
 
 def add_to_tik(alerts):
     global last_pos
@@ -106,57 +119,93 @@ def add_to_tik(alerts):
 
     address_list = api.path("/ip/firewall/address-list")
     resources = api.path("system/resource")
+    # Remove duplicate src_ips.
+    for event in {item['src_ip']: item for item in alerts}.values():
+        timestamp = dt.strptime(event["timestamp"],
+                                "%Y-%m-%dT%H:%M:%S.%f%z").strftime(
+                                    COMMENT_TIME_FORMAT)
 
-    for event in { item['src_ip'] : item for item in alerts }.values():  # Remove duplicate src_ips.
-        timestamp = dt.strptime(event["timestamp"], "%Y-%m-%dT%H:%M:%S.%f%z").strftime(COMMENT_TIME_FORMAT)
-
-        if event["src_ip"].startswith(WHITELIST_IPS):  # If you are source ip, then add destination ip.
+        if event["src_ip"].startswith(WHITELIST_IPS):
             if event["dest_ip"].startswith(WHITELIST_IPS):
-                continue  # Skip adding anything if both source and destination ips are from WHITELIST_IPS. (just in case)
+                continue
 
             try:
-                address_list.add(list=BLOCK_LIST_NAME, address=event["dest_ip"], comment=f"[{event['alert']['gid']}:{event['alert']['signature_id']}] {event['alert']['signature']} ::: SPort: {event.get('src_port')}/{event['proto']} ::: timestamp: {timestamp}", timeout=TIMEOUT)
-
-            except librouteros.exceptions.TrapError as e:
-                if "failure: already have such entry" in str(e):  # If such entry already exists, delete it and re-add.
-                    for row in address_list.select(_id, _list, _address).where(_address == event["dest_ip"], _list == BLOCK_LIST_NAME):
-                        address_list.remove(row[".id"])
-
-                    address_list.add(list=BLOCK_LIST_NAME, address=event["dest_ip"], comment=f"[{event['alert']['gid']}:{event['alert']['signature_id']}] {event['alert']['signature']} ::: SPort: {event.get('src_port')}/{event['proto']} ::: timestamp: {timestamp}", timeout=TIMEOUT)
-
-                else:
-                    raise
-
-        else:  # Add source ip.
-            try:
-                address_list.add(list=BLOCK_LIST_NAME, address=event["src_ip"], comment=f"[{event['alert']['gid']}:{event['alert']['signature_id']}] {event['alert']['signature']} ::: DPort: {event.get('dest_port')}/{event['proto']} ::: timestamp: {timestamp}", timeout=TIMEOUT)
+                address_list.add(list=BLOCK_LIST_NAME, address=event["dest_ip"],
+                                 comment=f"""[{event['alert']['gid']}:{
+                                 event['alert']['signature_id']}] {
+                                 event['alert']['signature']} ::: SPort: {
+                                 event.get('src_port')}/{
+                                 event['proto']} ::: timestamp: {
+                                 timestamp}""", timeout=TIMEOUT)
 
             except librouteros.exceptions.TrapError as e:
                 if "failure: already have such entry" in str(e):
-                    for row in address_list.select(_id, _list, _address).where(_address == event["src_ip"], _list == BLOCK_LIST_NAME):
+                    for row in address_list.select(_id, _list, _address).where(
+                            _address == event["dest_ip"],
+                            _list == BLOCK_LIST_NAME):
                         address_list.remove(row[".id"])
 
-                    address_list.add(list=BLOCK_LIST_NAME, address=event["src_ip"], comment=f"[{event['alert']['gid']}:{event['alert']['signature_id']}] {event['alert']['signature']} ::: DPort: {event.get('dest_port')}/{event['proto']} ::: timestamp: {timestamp}", timeout=TIMEOUT)
+                    address_list.add(list=BLOCK_LIST_NAME,
+                                     address=event["dest_ip"],
+                                     comment=f"""[{event['alert']['gid']}:{
+                                     event['alert']['signature_id']}] {
+                                     event['alert']['signature']} ::: SPort: {
+                                     event.get('src_port')}/{
+                                     event['proto']} ::: timestamp: {
+                                     timestamp}""", timeout=TIMEOUT)
 
                 else:
                     raise
-    # If router has been rebooted in past 10 minutes, add saved list(s), then wait for 10 minutes. (so rules don't get constantly re-added for 10 minutes)
-    if check_tik_uptime(resources) and (dt.now(tz.utc) - time) / td(minutes=1) > 10:
+
+        else:
+            try:
+                address_list.add(list=BLOCK_LIST_NAME, address=event["src_ip"],
+                                 comment=f"""[{event['alert']['gid']}:{
+                                 event['alert']['signature_id']}] {
+                                 event['alert']['signature']} ::: DPort: {
+                                 event.get('dest_port')}/{
+                                 event['proto']} ::: timestamp: {
+                                 timestamp}""", timeout=TIMEOUT)
+
+            except librouteros.exceptions.TrapError as e:
+                if "failure: already have such entry" in str(e):
+                    for row in address_list.select(_id, _list, _address).where(
+                            _address == event["src_ip"],
+                            _list == BLOCK_LIST_NAME):
+                        address_list.remove(row[".id"])
+
+                    address_list.add(list=BLOCK_LIST_NAME,
+                                     address=event["src_ip"],
+                                     comment=f"""[{event['alert']['gid']}:{
+                                     event['alert']['signature_id']}] {
+                                     event['alert']['signature']} ::: DPort: {
+                                     event.get('dest_port')}/{
+                                     event['proto']} ::: timestamp: {
+                                     timestamp}""", timeout=TIMEOUT)
+
+                else:
+                    raise
+
+    # If router has been rebooted in past 10 minutes, add saved list(s),
+    # then wait for 10 minutes. (so rules don't get constantly re-added)
+    if (check_tik_uptime(resources)
+            and (dt.now(tz.utc) - time) / td(minutes=1) > 10):
         time = dt.now(tz.utc)
         add_saved_lists(api)
 
     if not check_tik_uptime(resources):
         save_lists(api)
 
-def check_tik_uptime(resources):  # Check if router has been up for less than 10 minutes.
+
+def check_tik_uptime(resources):
     for row in resources:
         uptime = row["uptime"]
 
-    if any(letter in uptime for letter in "wdh"):  # If "w", "d" or "h" is in uptime then router is obviously up for more than 10 minutes.
+    if any(letter in uptime for letter in "wdh"):
         return False
 
     if "m" in uptime:
-        minutes = int(re.search("(\A|\D)(\d*)m", uptime).group(2))  # Find numbers in front of "m".
+        minutes = int(re.search("(\A|\D)(\d*)m", uptime).group(2))
     else:
         minutes = 0
 
@@ -164,6 +213,7 @@ def check_tik_uptime(resources):  # Check if router has been up for less than 10
         return False
 
     return True
+
 
 def connect_to_tik():
     global api
@@ -173,7 +223,8 @@ def connect_to_tik():
 
     while True:
         try:
-            api = connect(username=USERNAME, password=PASSWORD, host=ROUTER_IP, ssl_wrapper=ctx.wrap_socket, port=PORT)
+            api = connect(username=USERNAME, password=PASSWORD, host=ROUTER_IP,
+                          ssl_wrapper=ctx.wrap_socket, port=PORT)
             break
 
         except librouteros.exceptions.TrapError as e:
@@ -201,6 +252,7 @@ def connect_to_tik():
             else:
                 raise
 
+
 def save_lists(api):
     _address = Key("address")
     _list = Key("list")
@@ -211,8 +263,10 @@ def save_lists(api):
 
     with open(SAVE_LOCATION, "w") as f:
         for save_list in SAVE_LISTS:
-            for row in address_list.select(_list, _address, _timeout, _comment).where(_list == save_list):
+            for row in address_list.select(_list, _address, _timeout,
+                                           _comment).where(_list == save_list):
                 f.write(ujson.dumps(row) + "\n")
+
 
 def add_saved_lists(api):
     address_list = api.path("/ip/firewall/address-list")
@@ -225,7 +279,8 @@ def add_saved_lists(api):
         if cmnt is None:
             cmnt = ""
         try:
-            address_list.add(list=row["list"], address=row["address"], comment=cmnt, timeout=row["timeout"])
+            address_list.add(list=row["list"], address=row["address"],
+                             comment=cmnt, timeout=row["timeout"])
 
         except librouteros.exceptions.TrapError as e:
             if "failure: already have such entry" in str(e):
@@ -233,8 +288,9 @@ def add_saved_lists(api):
             else:
                 raise
 
+
 if __name__ == "__main__":
-    time = dt.now(tz.utc) - td(minutes=10)  # Set time to 10 minutes before now, so "(dt.now(tz.utc) - time) / td(minutes=1) > 10" is True the first time around.
+    time = dt.now(tz.utc) - td(minutes=10)
     last_pos = 0
     seek_to_end(FILEPATH)
     connect_to_tik()
