@@ -191,10 +191,10 @@ def add_to_tik(alerts):
     if (check_tik_uptime(resources)
             and (dt.now(tz.utc) - time) / td(minutes=1) > 10):
         time = dt.now(tz.utc)
-        add_saved_lists(api)
+        add_saved_lists(address_list)
 
     if not check_tik_uptime(resources):
-        save_lists(api)
+        save_lists(address_list)
 
 
 def check_tik_uptime(resources):
@@ -205,7 +205,7 @@ def check_tik_uptime(resources):
         return False
 
     if "m" in uptime:
-        minutes = int(re.search("(\A|\D)(\d*)m", uptime).group(2))
+        minutes = int(re.search(r"(\A|\D)(\d*)m", uptime).group(2))
     else:
         minutes = 0
 
@@ -232,8 +232,8 @@ def connect_to_tik():
                 print("Invalid username or password.")
                 sleep(10)
                 continue
-            else:
-                raise
+
+            raise
 
         except ConnectionRefusedError:
             print("Connection refused. (api-ssl disabled in router?)")
@@ -241,24 +241,24 @@ def connect_to_tik():
             continue
 
         except OSError as e:
-            if "[Errno 113] No route to host" in str(e):
+            if e.errno == 113:
                 print("No route to host. Retrying in 10 seconds..")
                 sleep(10)
                 continue
-            elif "[Errno 101] Network is unreachable" in str(e):
+
+            if e.errno == 101:
                 print("Network is unreachable. Retrying in 10 seconds..")
                 sleep(10)
                 continue
-            else:
-                raise
+
+            raise
 
 
-def save_lists(api):
+def save_lists(address_list):
     _address = Key("address")
     _list = Key("list")
     _timeout = Key("timeout")
     _comment = Key("comment")
-    address_list = api.path("/ip/firewall/address-list")
     os.makedirs(os.path.dirname(SAVE_LOCATION), exist_ok=True)
 
     with open(SAVE_LOCATION, "w") as f:
@@ -268,9 +268,7 @@ def save_lists(api):
                 f.write(ujson.dumps(row) + "\n")
 
 
-def add_saved_lists(api):
-    address_list = api.path("/ip/firewall/address-list")
-
+def add_saved_lists(address_list):
     with open(SAVE_LOCATION, "r") as f:
         addresses = [ujson.loads(line) for line in f.readlines()]
 
@@ -285,8 +283,8 @@ def add_saved_lists(api):
         except librouteros.exceptions.TrapError as e:
             if "failure: already have such entry" in str(e):
                 continue
-            else:
-                raise
+
+            raise
 
 
 if __name__ == "__main__":
