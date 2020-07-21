@@ -26,13 +26,13 @@ I'm using it as a systemd service:
 ```
 [Unit]
 Description=Suricata to Mikrotik API in Python
-After=network.target time-sync.target
-Requires=network-online.target
+After=network.target network-online.target time-sync.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/python3 /usr/local/bin/suritik.py
-Restart=on-failure
+Restart=always
 RestartSec=3
 Environment=PYTHONUNBUFFERED=1
 
