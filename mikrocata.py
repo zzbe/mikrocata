@@ -47,7 +47,10 @@ COMMENT_TIME_FORMAT = "%-d %b %Y %H:%M:%S.%f"  # See datetime strftime formats.
 SAVE_LISTS = [BLOCK_LIST_NAME]
 
 # (!) Make sure you have privileges (!)
-SAVE_LOCATION = os.path.abspath("/var/log/mikrotik/lists.json")
+SAVE_LISTS_LOCATION = os.path.abspath("/var/lib/mikrocata/savelists.json")
+
+# Ignored rules file location - check ignored.conf for syntax.
+IGNORE_LIST_LOCATION = os.path.abspath("/etc/mikrocata/ignore.conf")
 
 # Add all alerts from alerts.json on start?
 # Setting this to True will start reading alerts.json from beginning
@@ -121,30 +124,16 @@ def add_to_tik(alerts):
     resources = api.path("system/resource")
     # Remove duplicate src_ips.
     for event in {item['src_ip']: item for item in alerts}.values():
-        timestamp = dt.strptime(event["timestamp"],
-                                "%Y-%m-%dT%H:%M:%S.%f%z").strftime(
-                                    COMMENT_TIME_FORMAT)
+        if not in_ignore_list(ignore_list, event):
+            timestamp = dt.strptime(event["timestamp"],
+                                    "%Y-%m-%dT%H:%M:%S.%f%z").strftime(
+                                        COMMENT_TIME_FORMAT)
 
-        if event["src_ip"].startswith(WHITELIST_IPS):
-            if event["dest_ip"].startswith(WHITELIST_IPS):
-                continue
+            if event["src_ip"].startswith(WHITELIST_IPS):
+                if event["dest_ip"].startswith(WHITELIST_IPS):
+                    continue
 
-            try:
-                address_list.add(list=BLOCK_LIST_NAME, address=event["dest_ip"],
-                                 comment=f"""[{event['alert']['gid']}:{
-                                 event['alert']['signature_id']}] {
-                                 event['alert']['signature']} ::: SPort: {
-                                 event.get('src_port')}/{
-                                 event['proto']} ::: timestamp: {
-                                 timestamp}""", timeout=TIMEOUT)
-
-            except librouteros.exceptions.TrapError as e:
-                if "failure: already have such entry" in str(e):
-                    for row in address_list.select(_id, _list, _address).where(
-                            _address == event["dest_ip"],
-                            _list == BLOCK_LIST_NAME):
-                        address_list.remove(row[".id"])
-
+                try:
                     address_list.add(list=BLOCK_LIST_NAME,
                                      address=event["dest_ip"],
                                      comment=f"""[{event['alert']['gid']}:{
@@ -152,28 +141,31 @@ def add_to_tik(alerts):
                                      event['alert']['signature']} ::: SPort: {
                                      event.get('src_port')}/{
                                      event['proto']} ::: timestamp: {
-                                     timestamp}""", timeout=TIMEOUT)
+                                     timestamp}""",
+                                     timeout=TIMEOUT)
 
-                else:
-                    raise
+                except librouteros.exceptions.TrapError as e:
+                    if "failure: already have such entry" in str(e):
+                        for row in address_list.select(_id, _list, _address).where(
+                                _address == event["dest_ip"],
+                                _list == BLOCK_LIST_NAME):
+                            address_list.remove(row[".id"])
 
-        else:
-            try:
-                address_list.add(list=BLOCK_LIST_NAME, address=event["src_ip"],
-                                 comment=f"""[{event['alert']['gid']}:{
-                                 event['alert']['signature_id']}] {
-                                 event['alert']['signature']} ::: DPort: {
-                                 event.get('dest_port')}/{
-                                 event['proto']} ::: timestamp: {
-                                 timestamp}""", timeout=TIMEOUT)
+                        address_list.add(list=BLOCK_LIST_NAME,
+                                         address=event["dest_ip"],
+                                         comment=f"""[{event['alert']['gid']}:{
+                                         event['alert']['signature_id']}] {
+                                         event['alert']['signature']} ::: SPort: {
+                                         event.get('src_port')}/{
+                                         event['proto']} ::: timestamp: {
+                                         timestamp}""",
+                                         timeout=TIMEOUT)
 
-            except librouteros.exceptions.TrapError as e:
-                if "failure: already have such entry" in str(e):
-                    for row in address_list.select(_id, _list, _address).where(
-                            _address == event["src_ip"],
-                            _list == BLOCK_LIST_NAME):
-                        address_list.remove(row[".id"])
+                    else:
+                        raise
 
+            else:
+                try:
                     address_list.add(list=BLOCK_LIST_NAME,
                                      address=event["src_ip"],
                                      comment=f"""[{event['alert']['gid']}:{
@@ -181,10 +173,28 @@ def add_to_tik(alerts):
                                      event['alert']['signature']} ::: DPort: {
                                      event.get('dest_port')}/{
                                      event['proto']} ::: timestamp: {
-                                     timestamp}""", timeout=TIMEOUT)
+                                     timestamp}""",
+                                     timeout=TIMEOUT)
 
-                else:
-                    raise
+                except librouteros.exceptions.TrapError as e:
+                    if "failure: already have such entry" in str(e):
+                        for row in address_list.select(_id, _list, _address).where(
+                                _address == event["src_ip"],
+                                _list == BLOCK_LIST_NAME):
+                            address_list.remove(row[".id"])
+
+                        address_list.add(list=BLOCK_LIST_NAME,
+                                         address=event["src_ip"],
+                                         comment=f"""[{event['alert']['gid']}:{
+                                         event['alert']['signature_id']}] {
+                                         event['alert']['signature']} ::: DPort: {
+                                         event.get('dest_port')}/{
+                                         event['proto']} ::: timestamp: {
+                                         timestamp}""",
+                                         timeout=TIMEOUT)
+
+                    else:
+                        raise
 
     # If router has been rebooted in past 10 minutes, add saved list(s),
     # then wait for 10 minutes. (so rules don't get constantly re-added)
@@ -259,9 +269,9 @@ def save_lists(address_list):
     _list = Key("list")
     _timeout = Key("timeout")
     _comment = Key("comment")
-    os.makedirs(os.path.dirname(SAVE_LOCATION), exist_ok=True)
+    os.makedirs(os.path.dirname(SAVE_LISTS_LOCATION), exist_ok=True)
 
-    with open(SAVE_LOCATION, "w") as f:
+    with open(SAVE_LISTS_LOCATION, "w") as f:
         for save_list in SAVE_LISTS:
             for row in address_list.select(_list, _address, _timeout,
                                            _comment).where(_list == save_list):
@@ -269,7 +279,7 @@ def save_lists(address_list):
 
 
 def add_saved_lists(address_list):
-    with open(SAVE_LOCATION, "r") as f:
+    with open(SAVE_LISTS_LOCATION, "r") as f:
         addresses = [ujson.loads(line) for line in f.readlines()]
 
     for row in addresses:
@@ -287,11 +297,49 @@ def add_saved_lists(address_list):
             raise
 
 
+def read_ignore_list(fpath):
+    global ignore_list
+
+    try:
+        with open(fpath, "r") as f:
+
+            for line in f:
+                line = line.partition("#")[0].strip()
+
+                if line.strip():
+                    ignore_list.append(line)
+
+    except FileNotFoundError:
+        print(f"File: {IGNORE_LIST_LOCATION} not found. Continuing..")
+
+
+def in_ignore_list(ignr_list, event):
+
+    for entry in ignr_list:
+        if (entry.isdigit()
+                and int(entry) == int(event['alert']['signature_id'])):
+            sleep(1)
+            return True
+
+        if entry.startswith("re:"):
+            entry = entry.partition("re:")[2].strip()
+
+            if re.search(entry, event['alert']['signature']):
+                sleep(1)
+                return True
+
+        return False
+
+
 if __name__ == "__main__":
     time = dt.now(tz.utc) - td(minutes=10)
     last_pos = 0
+    ignore_list = []
+    api = None
+
     seek_to_end(FILEPATH)
     connect_to_tik()
+    read_ignore_list(IGNORE_LIST_LOCATION)
 
     wm = pyinotify.WatchManager()
     handler = EventHandler()
