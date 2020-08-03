@@ -1,4 +1,4 @@
-## Suritik
+## Microcata
 
 Python script for adding Suricata alerts into Mikrotik routers.
 
@@ -31,7 +31,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /usr/local/bin/suritik.py
+ExecStart=/usr/bin/python3 /usr/local/bin/microcata.py
 Restart=always
 RestartSec=3
 Environment=PYTHONUNBUFFERED=1
