@@ -49,7 +49,7 @@ SAVE_LISTS = [BLOCK_LIST_NAME]
 # (!) Make sure you have privileges (!)
 SAVE_LISTS_LOCATION = os.path.abspath("/var/lib/mikrocata/savelists.json")
 
-# Ignored rules file location - check ignored.conf for syntax.
+# Ignored rules file location - check ignore.conf for syntax.
 IGNORE_LIST_LOCATION = os.path.abspath("/etc/mikrocata/ignore.conf")
 
 # Add all alerts from alerts.json on start?

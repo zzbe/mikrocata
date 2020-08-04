@@ -12,10 +12,10 @@ Requirements:
 In suricata.yaml add another eve-log:
 ```
   - eve-log:
-      enabled: yes 
+      enabled: yes
       filetype: regular
-      filename: alerts.json   
-      types:      
+      filename: alerts.json
+      types:
         - alert
 ```
 
