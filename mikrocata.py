@@ -314,7 +314,6 @@ def read_ignore_list(fpath):
 
 
 def in_ignore_list(ignr_list, event):
-
     for entry in ignr_list:
         if (entry.isdigit()
                 and int(entry) == int(event['alert']['signature_id'])):
@@ -328,7 +327,7 @@ def in_ignore_list(ignr_list, event):
                 sleep(1)
                 return True
 
-        return False
+    return False
 
 
 if __name__ == "__main__":
