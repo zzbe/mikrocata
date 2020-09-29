@@ -13,6 +13,7 @@
 
 import ssl
 import os
+import socket
 import re
 from time import sleep
 from datetime import datetime as dt
@@ -59,10 +60,15 @@ IGNORE_LIST_LOCATION = os.path.abspath("/etc/mikrocata/ignore.conf")
 ADD_ON_START = False
 
 # ------------------------------------------------------------------------------
-
+# global vars
+time = dt.now(tz.utc) - td(minutes=10)
+last_pos = 0
+api = None
+ignore_list = []
 
 class EventHandler(pyinotify.ProcessEvent):
-    def process_IN_MODIFY(self, event):
+    @classmethod
+    def process_IN_MODIFY(cls, event):
         try:
             add_to_tik(read_json(FILEPATH))
         except ConnectionError:
@@ -89,7 +95,7 @@ def seek_to_end(fpath):
                 return
 
             except FileNotFoundError:
-                print(f"File: {fpath} not found. Retrying in 10 seconds..")
+                print(f"[Mikrocata] File: {fpath} not found. Retrying in 10 seconds..")
                 sleep(10)
                 continue
 
@@ -106,7 +112,7 @@ def read_json(fpath):
                 return alerts
 
         except FileNotFoundError:
-            print(f"File: {fpath} not found. Retrying in 10 seconds..")
+            print(f"[Mikrocata] File: {fpath} not found. Retrying in 10 seconds..")
             sleep(10)
             continue
 
@@ -133,68 +139,44 @@ def add_to_tik(alerts):
                 if event["dest_ip"].startswith(WHITELIST_IPS):
                     continue
 
-                try:
-                    address_list.add(list=BLOCK_LIST_NAME,
-                                     address=event["dest_ip"],
-                                     comment=f"""[{event['alert']['gid']}:{
-                                     event['alert']['signature_id']}] {
-                                     event['alert']['signature']} ::: SPort: {
-                                     event.get('src_port')}/{
-                                     event['proto']} ::: timestamp: {
-                                     timestamp}""",
-                                     timeout=TIMEOUT)
-
-                except librouteros.exceptions.TrapError as e:
-                    if "failure: already have such entry" in str(e):
-                        for row in address_list.select(_id, _list, _address).where(
-                                _address == event["dest_ip"],
-                                _list == BLOCK_LIST_NAME):
-                            address_list.remove(row[".id"])
-
-                        address_list.add(list=BLOCK_LIST_NAME,
-                                         address=event["dest_ip"],
-                                         comment=f"""[{event['alert']['gid']}:{
-                                         event['alert']['signature_id']}] {
-                                         event['alert']['signature']} ::: SPort: {
-                                         event.get('src_port')}/{
-                                         event['proto']} ::: timestamp: {
-                                         timestamp}""",
-                                         timeout=TIMEOUT)
-
-                    else:
-                        raise
+                wanted_ip, wanted_port = event["dest_ip"], event.get("src_port")
 
             else:
-                try:
+                wanted_ip, wanted_port = event["src_ip"], event.get("dest_port")
+
+            try:
+                address_list.add(list=BLOCK_LIST_NAME,
+                                 address=wanted_ip,
+                                 comment=f"""[{event['alert']['gid']}:{
+                                 event['alert']['signature_id']}] {
+                                 event['alert']['signature']} ::: Port: {
+                                 wanted_port}/{
+                                 event['proto']} ::: timestamp: {
+                                 timestamp}""",
+                                 timeout=TIMEOUT)
+
+            except librouteros.exceptions.TrapError as e:
+                if "failure: already have such entry" in str(e):
+                    for row in address_list.select(_id, _list, _address).where(
+                            _address == wanted_ip,
+                            _list == BLOCK_LIST_NAME):
+                        address_list.remove(row[".id"])
+
                     address_list.add(list=BLOCK_LIST_NAME,
-                                     address=event["src_ip"],
+                                     address=wanted_ip,
                                      comment=f"""[{event['alert']['gid']}:{
                                      event['alert']['signature_id']}] {
-                                     event['alert']['signature']} ::: DPort: {
-                                     event.get('dest_port')}/{
+                                     event['alert']['signature']} ::: Port: {
+                                     wanted_port}/{
                                      event['proto']} ::: timestamp: {
                                      timestamp}""",
                                      timeout=TIMEOUT)
 
-                except librouteros.exceptions.TrapError as e:
-                    if "failure: already have such entry" in str(e):
-                        for row in address_list.select(_id, _list, _address).where(
-                                _address == event["src_ip"],
-                                _list == BLOCK_LIST_NAME):
-                            address_list.remove(row[".id"])
+                else:
+                    raise
 
-                        address_list.add(list=BLOCK_LIST_NAME,
-                                         address=event["src_ip"],
-                                         comment=f"""[{event['alert']['gid']}:{
-                                         event['alert']['signature_id']}] {
-                                         event['alert']['signature']} ::: DPort: {
-                                         event.get('dest_port')}/{
-                                         event['proto']} ::: timestamp: {
-                                         timestamp}""",
-                                         timeout=TIMEOUT)
-
-                    else:
-                        raise
+            except socket.timeout:
+                connect_to_tik()
 
     # If router has been rebooted in past 10 minutes, add saved list(s),
     # then wait for 10 minutes. (so rules don't get constantly re-added)
@@ -239,25 +221,30 @@ def connect_to_tik():
 
         except librouteros.exceptions.TrapError as e:
             if "invalid user name or password" in str(e):
-                print("Invalid username or password.")
+                print("[Mikrocata] Invalid username or password.")
                 sleep(10)
                 continue
 
             raise
 
+        except socket.timeout as e:
+            print(f"[Mikrocata] Socket timeout: {str(e)}.")
+            sleep(30)
+            continue
+
         except ConnectionRefusedError:
-            print("Connection refused. (api-ssl disabled in router?)")
+            print("[Mikrocata] Connection refused. (api-ssl disabled in router?)")
             sleep(10)
             continue
 
         except OSError as e:
             if e.errno == 113:
-                print("No route to host. Retrying in 10 seconds..")
+                print("[Mikrocata] No route to host. Retrying in 10 seconds..")
                 sleep(10)
                 continue
 
             if e.errno == 101:
-                print("Network is unreachable. Retrying in 10 seconds..")
+                print("[Mikrocata] Network is unreachable. Retrying in 10 seconds..")
                 sleep(10)
                 continue
 
@@ -310,13 +297,12 @@ def read_ignore_list(fpath):
                     ignore_list.append(line)
 
     except FileNotFoundError:
-        print(f"File: {IGNORE_LIST_LOCATION} not found. Continuing..")
+        print(f"[Mikrocata] File: {IGNORE_LIST_LOCATION} not found. Continuing..")
 
 
 def in_ignore_list(ignr_list, event):
     for entry in ignr_list:
-        if (entry.isdigit()
-                and int(entry) == int(event['alert']['signature_id'])):
+        if entry.isdigit() and int(entry) == int(event['alert']['signature_id']):
             sleep(1)
             return True
 
@@ -330,12 +316,7 @@ def in_ignore_list(ignr_list, event):
     return False
 
 
-if __name__ == "__main__":
-    time = dt.now(tz.utc) - td(minutes=10)
-    last_pos = 0
-    ignore_list = []
-    api = None
-
+def main():
     seek_to_end(FILEPATH)
     connect_to_tik()
     read_ignore_list(IGNORE_LIST_LOCATION)
@@ -345,7 +326,23 @@ if __name__ == "__main__":
     notifier = pyinotify.Notifier(wm, handler)
     wm.add_watch(FILEPATH, pyinotify.IN_MODIFY)
 
-    try:
-        notifier.loop()
-    except librouteros.exceptions.ConnectionClosed:
-        connect_to_tik()
+    while True:
+        try:
+            notifier.loop()
+
+        except (librouteros.exceptions.ConnectionClosed, socket.timeout) as e:
+            print(f"[Mikrocata] (4) {str(e)}")
+            connect_to_tik()
+            continue
+
+        except librouteros.exceptions.TrapError as e:
+            print(f"[Mikrocata] (8) librouteros.TrapError: {str(e)}")
+            continue
+
+        except KeyError as e:
+            print(f"[Mikrocata] (8) KeyError: {str(e)}")
+            continue
+
+
+if __name__ == "__main__":
+    main()
