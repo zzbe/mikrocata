@@ -5,7 +5,7 @@ Python script for adding Suricata alerts into Mikrotik routers.
 It's reading from Suricata eve-log file named alerts.json.
 
 Requirements:
-- python-librouteros
+- python-librouteros (try version 3 or above if you encounter ModuleNotFoundError)
 - python-ujson
 - python-pyinotify
 
