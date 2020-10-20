@@ -7,7 +7,7 @@ It's reading from Suricata eve-log file named alerts.json.
 Requirements:
 - python-librouteros
 - python-ujson
-- python-pyinotify
+- python-pyinotify (try version 3 or above if you encounter ModuleNotFoundError)
 
 In suricata.yaml add another eve-log:
 ```
