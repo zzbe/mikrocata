@@ -1,0 +1,19 @@
+# Sample Suricata systemd unit file.
+[Unit]
+Description=Suricata IDS/IPS daemon
+After=network.target
+
+[Service]
+# Environment file to pick up $OPTIONS. On Fedora/EL this would be
+# /etc/sysconfig/suricata, or on Debian/Ubuntu, /etc/default/suricata.
+#EnvironmentFile=-/etc/sysconfig/suricata
+#EnvironmentFile=-/etc/default/suricata
+Type=simple
+PIDFile=suricata/suricata.pid
+ExecStart=/usr/bin/suricata --af-packet=tzsp0 -c /etc/suricata/suricata.yaml -F /etc/suricata/capture-filter.bpf --pidfile /run/suricata/suricata.pid
+ExecReload=/bin/kill -USR2 $MAINPID
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
