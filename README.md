@@ -121,7 +121,9 @@ WantedBy=multi-user.target
 ```
 
 Start it on your dummy interface (I'm using name tzsp0, you can have dummy0 or whatever):
-```systemctl enable --now TZSPreplay@tzsp0.service```
+```
+systemctl enable --now TZSPreplay@tzsp0.service
+```
 
 Edit suricata.service to listen on dummy interface (notice --af-packet=<dummy interface>):
 ```
