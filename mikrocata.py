@@ -17,8 +17,6 @@ import socket
 import re
 from time import sleep
 from datetime import datetime as dt
-from datetime import timedelta as td
-from datetime import timezone as tz
 import pyinotify
 import ujson
 import librouteros
@@ -50,6 +48,9 @@ SAVE_LISTS = [BLOCK_LIST_NAME]
 # (!) Make sure you have privileges (!)
 SAVE_LISTS_LOCATION = os.path.abspath("/var/lib/mikrocata/savelists.json")
 
+# Location for Mikrotik's uptime. (needed for re-adding lists after reboot)
+UPTIME_BOOKMARK = os.path.abspath("/var/lib/mikrocata/uptime.bookmark")
+
 # Ignored rules file location - check ignore.conf for syntax.
 IGNORE_LIST_LOCATION = os.path.abspath("/etc/mikrocata/ignore.conf")
 
@@ -61,7 +62,6 @@ ADD_ON_START = False
 
 # ------------------------------------------------------------------------------
 # global vars
-time = dt.now(tz.utc) - td(minutes=10)
 last_pos = 0
 api = None
 ignore_list = []
@@ -119,7 +119,6 @@ def read_json(fpath):
 
 def add_to_tik(alerts):
     global last_pos
-    global time
     global api
 
     _address = Key("address")
@@ -178,33 +177,60 @@ def add_to_tik(alerts):
             except socket.timeout:
                 connect_to_tik()
 
-    # If router has been rebooted in past 10 minutes, add saved list(s),
-    # then wait for 10 minutes. (so rules don't get constantly re-added)
-    if (check_tik_uptime(resources)
-            and (dt.now(tz.utc) - time) / td(minutes=1) > 10):
-        time = dt.now(tz.utc)
+    # If router has been rebooted add saved list(s), then save lists to a file.
+    if check_tik_uptime(resources):
         add_saved_lists(address_list)
 
-    if not check_tik_uptime(resources):
-        save_lists(address_list)
-
+    save_lists(address_list)
 
 def check_tik_uptime(resources):
+
     for row in resources:
         uptime = row["uptime"]
 
-    if any(letter in uptime for letter in "wdh"):
-        return False
+    if "w" in uptime:
+        weeks = int(re.search(r"(\A|\D)(\d*)w", uptime).group(2))
+    else:
+        weeks = 0
+
+    if "d" in uptime:
+        days = int(re.search(r"(\A|\D)(\d*)d", uptime).group(2))
+    else:
+        days = 0
+
+    if "h" in uptime:
+        hours = int(re.search(r"(\A|\D)(\d*)h", uptime).group(2))
+    else:
+        hours = 0
 
     if "m" in uptime:
         minutes = int(re.search(r"(\A|\D)(\d*)m", uptime).group(2))
     else:
         minutes = 0
 
-    if minutes >= 10:
-        return False
+    if "s" in uptime:
+        seconds = int(re.search(r"(\A|\D)(\d*)s", uptime).group(2))
+    else:
+        seconds = 0
 
-    return True
+    total_seconds = (weeks*7*24 + days*24 + hours)*3600 + minutes*60 + seconds
+
+    if total_seconds < 900:
+        total_seconds = 900
+
+    with open(UPTIME_BOOKMARK, "r") as f:
+        try:
+            bookmark = int(f.read())
+        except ValueError:
+            bookmark = 0
+
+    with open(UPTIME_BOOKMARK, "w+") as f:
+        f.write(str(total_seconds))
+
+    if total_seconds < bookmark:
+        return True
+
+    return False
 
 
 def connect_to_tik():
@@ -256,7 +282,6 @@ def save_lists(address_list):
     _list = Key("list")
     _timeout = Key("timeout")
     _comment = Key("comment")
-    os.makedirs(os.path.dirname(SAVE_LISTS_LOCATION), exist_ok=True)
 
     with open(SAVE_LISTS_LOCATION, "w") as f:
         for save_list in SAVE_LISTS:
@@ -320,6 +345,8 @@ def main():
     seek_to_end(FILEPATH)
     connect_to_tik()
     read_ignore_list(IGNORE_LIST_LOCATION)
+    os.makedirs(os.path.dirname(SAVE_LISTS_LOCATION), exist_ok=True)
+    os.makedirs(os.path.dirname(UPTIME_BOOKMARK), exist_ok=True)
 
     wm = pyinotify.WatchManager()
     handler = EventHandler()
