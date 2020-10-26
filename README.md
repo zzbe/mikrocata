@@ -125,7 +125,7 @@ Start it on your dummy interface (I'm using name tzsp0, you can have dummy0 or w
 systemctl enable --now TZSPreplay@tzsp0.service
 ```
 
-Edit suricata.service to listen on dummy interface (notice --af-packet=<dummy interface>):
+Edit suricata.service to listen on dummy interface (notice --af-packet=*dummy_interface*):
 ```
 # Sample Suricata systemd unit file.
 [Unit]
