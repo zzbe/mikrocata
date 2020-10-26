@@ -121,7 +121,7 @@ WantedBy=multi-user.target
 ```
 
 Start it on your dummy interface (I'm using name tzsp0, you can have dummy0 or whatever):
-`systemctl enable --now TZSPreplay@tzsp0.service`
+```systemctl enable --now TZSPreplay@tzsp0.service```
 
 Edit suricata.service to listen on dummy interface (notice --af-packet=<dummy interface>):
 ```
@@ -146,7 +146,7 @@ RestartSec=3
 WantedBy=multi-user.target
 ```
 
-Finally, we can add mangle rule to Mikrotik:
+Finally, we can add mangle rule to Mikrotik (you can add many):
 ```
 /ip firewall mangle
 add action=sniff-tzsp chain=prerouting comment="TZSP sniffing -> Suricata" sniff-target=<IP_OF_SURICATA> sniff-target-port=37008
