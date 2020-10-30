@@ -155,6 +155,8 @@ add action=sniff-tzsp chain=prerouting comment="TZSP sniffing -> Suricata" sniff
 ```
 
 Don't forget to block this address list (first rule might be enough):
+
+Note: Above mangle rule sniffs everything in prerouting but firewall rules below don't block anything from bridge, so you might as well specify WAN port in mangle or if you want to block devices from bridge, omit in/out-interface=!bridge in firewall.
 ```
 /ip firewall raw
 add action=drop chain=prerouting comment="Suricata list -> *" in-interface=!bridge log-prefix=Suricata src-address-list=Suricata
@@ -163,7 +165,7 @@ add action=drop chain=output comment="Router -> Suricata list" dst-address-list=
 /ip firewall filter
 add action=reject chain=forward comment="Prohibit forward to Suricata list" dst-address-list=Suricata log=yes log-prefix=PROHIBITED out-interface=!bridge reject-with=icmp-host-prohibited
 ```
-Note: Above mangle rule sniffs everything in prerouting but firewall rules don't block anything from bridge, so you might as well specify WAN port in mangle or if you want to block devices from bridge, omit in/out-interface=!bridge in firewall.
+
 --------------------------------------------------------------------
 Credits for idea:
 - tomfisk - https://forum.mikrotik.com/viewtopic.php?f=2&t=111727
