@@ -76,7 +76,7 @@ set 0 mirror-source=ether1 mirror-target=ether5
 IMHO better, safer and more flexible way is to use 'sniff TZSP' in /ip firewall mangle:
 
 You will need previously mentioned tzsp2pcap and tcpreplay installed.
-You will also need to create a dummy interface - it will be solely used for replaying
+You will also need to create a dummy interface - it will be used solely for replaying
 packets for Suricata.
 
 Here is example for systemd-networkd:
